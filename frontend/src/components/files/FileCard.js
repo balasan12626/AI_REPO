@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { filesApi } from '../../services/api';
 
 const FileCard = ({ file, onDelete, onRename, selected, onSelect, viewMode }) => {
   const [isRenaming, setIsRenaming] = useState(false);
@@ -69,9 +70,20 @@ const FileCard = ({ file, onDelete, onRename, selected, onSelect, viewMode }) =>
     setIsRenaming(false);
   };
 
-  const handleDownload = () => {
-    if (file.path) {
-      window.open(`http://localhost:5000${file.path}`, '_blank');
+  const handleDownload = async () => {
+    try {
+      // For S3 files, get signed URL
+      if (file.s3Key) {
+        const response = await filesApi.getDownloadUrl(file.id);
+        if (response.success && response.data.url) {
+          window.open(response.data.url, '_blank');
+        }
+      } else if (file.path) {
+        // Fallback for local files or direct S3 URLs
+        window.open(file.path, '_blank');
+      }
+    } catch (error) {
+      console.error('Download error:', error);
     }
   };
 

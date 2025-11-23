@@ -2,21 +2,25 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const router = express.Router();
 
 const dataPath = path.join(__dirname, '../data/files.json');
-const uploadsDir = path.join(__dirname, '../uploads');
 
-// Multer configuration for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
+// AWS S3 Configuration
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
-  }
 });
+
+const BUCKET_NAME = process.env.AWS_S3_BUCKET;
+
+// Multer configuration for memory storage (for S3 upload)
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
@@ -93,6 +97,39 @@ const formatFileSize = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
 
+// Upload file to S3
+const uploadToS3 = async (file, key) => {
+  const command = new PutObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+    Body: file.buffer,
+    ContentType: file.mimetype,
+  });
+
+  await s3Client.send(command);
+  return `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+};
+
+// Delete file from S3
+const deleteFromS3 = async (key) => {
+  const command = new DeleteObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+  });
+
+  await s3Client.send(command);
+};
+
+// Get signed URL for private file access
+const getSignedDownloadUrl = async (key) => {
+  const command = new GetObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+  });
+
+  return await getSignedUrl(s3Client, command, { expiresIn: 3600 }); // 1 hour expiry
+};
+
 // GET all files and folders
 router.get('/', (req, res) => {
   try {
@@ -148,6 +185,28 @@ router.get('/:id', (req, res) => {
   }
 });
 
+// GET download URL for file
+router.get('/:id/download', async (req, res) => {
+  try {
+    const files = readFiles();
+    const file = files.find(f => f.id === req.params.id);
+
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
+
+    if (file.type === 'folder') {
+      return res.status(400).json({ success: false, error: 'Cannot download a folder' });
+    }
+
+    // Generate signed URL for download
+    const signedUrl = await getSignedDownloadUrl(file.s3Key);
+    res.json({ success: true, data: { url: signedUrl } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // POST create folder
 router.post('/folder', (req, res) => {
   try {
@@ -176,8 +235,8 @@ router.post('/folder', (req, res) => {
   }
 });
 
-// POST upload file
-router.post('/upload', upload.single('file'), (req, res) => {
+// POST upload file to S3
+router.post('/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No file uploaded' });
@@ -186,6 +245,13 @@ router.post('/upload', upload.single('file'), (req, res) => {
     const { parentId } = req.body;
     const files = readFiles();
 
+    // Generate unique S3 key
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const s3Key = `uploads/${uniqueSuffix}-${req.file.originalname}`;
+
+    // Upload to S3
+    const s3Url = await uploadToS3(req.file, s3Key);
+
     const newFile = {
       id: generateId(),
       name: req.file.originalname,
@@ -193,7 +259,9 @@ router.post('/upload', upload.single('file'), (req, res) => {
       fileType: getFileType(req.file.originalname),
       size: req.file.size,
       sizeFormatted: formatFileSize(req.file.size),
-      path: `/uploads/${req.file.filename}`,
+      s3Key: s3Key,
+      s3Url: s3Url,
+      path: s3Url, // For backward compatibility
       parentId: parentId || 'root',
       mimeType: req.file.mimetype,
       createdAt: new Date().toISOString(),
@@ -205,6 +273,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
 
     res.status(201).json({ success: true, data: newFile });
   } catch (error) {
+    console.error('S3 Upload Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -252,7 +321,7 @@ router.put('/:id/move', (req, res) => {
 });
 
 // DELETE file/folder
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const files = readFiles();
     const index = files.findIndex(f => f.id === req.params.id);
@@ -263,33 +332,37 @@ router.delete('/:id', (req, res) => {
 
     const deletedFile = files[index];
 
-    // If it's a file with a physical file, delete it
-    if (deletedFile.path) {
-      const filePath = path.join(__dirname, '..', deletedFile.path);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+    // If it's a file with S3 key, delete from S3
+    if (deletedFile.s3Key) {
+      try {
+        await deleteFromS3(deletedFile.s3Key);
+      } catch (s3Error) {
+        console.error('S3 Delete Error:', s3Error);
+        // Continue even if S3 delete fails
       }
     }
 
     // If it's a folder, delete all children
     if (deletedFile.type === 'folder') {
-      const deleteChildren = (parentId) => {
+      const deleteChildren = async (parentId) => {
         const children = files.filter(f => f.parentId === parentId);
-        children.forEach(child => {
+        for (const child of children) {
           if (child.type === 'folder') {
-            deleteChildren(child.id);
+            await deleteChildren(child.id);
           }
-          if (child.path) {
-            const childPath = path.join(__dirname, '..', child.path);
-            if (fs.existsSync(childPath)) {
-              fs.unlinkSync(childPath);
+          // Delete from S3 if it has an S3 key
+          if (child.s3Key) {
+            try {
+              await deleteFromS3(child.s3Key);
+            } catch (s3Error) {
+              console.error('S3 Delete Error:', s3Error);
             }
           }
           const childIndex = files.findIndex(f => f.id === child.id);
           if (childIndex !== -1) files.splice(childIndex, 1);
-        });
+        }
       };
-      deleteChildren(deletedFile.id);
+      await deleteChildren(deletedFile.id);
     }
 
     files.splice(index, 1);

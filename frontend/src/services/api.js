@@ -103,6 +103,8 @@ export const filesApi = {
   }),
 
   getPath: (id) => apiRequest(`/files/${id}/path`),
+
+  getDownloadUrl: (id) => apiRequest(`/files/${id}/download`),
 };
 
 // Health check
