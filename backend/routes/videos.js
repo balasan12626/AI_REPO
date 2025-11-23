@@ -1,41 +1,86 @@
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
 const router = express.Router();
 
-const dataPath = path.join(__dirname, '../data/videos.json');
+// AWS DynamoDB Configuration
+const dynamoClient = new DynamoDBClient({
+  region: process.env.AWS_DYNAMODB_REGION || 'ap-south-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
+const docClient = DynamoDBDocumentClient.from(dynamoClient);
+const TABLE_NAME = process.env.DYNAMODB_TABLE_VIDEOS || 'VideoMetadata';
 
 // Helper functions
-const readVideos = () => {
-  try {
-    if (!fs.existsSync(dataPath)) {
-      fs.writeFileSync(dataPath, JSON.stringify([], null, 2));
-      return [];
-    }
-    const data = fs.readFileSync(dataPath, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    console.error('Error reading videos:', error);
-    return [];
-  }
-};
-
-const writeVideos = (videos) => {
-  try {
-    fs.writeFileSync(dataPath, JSON.stringify(videos, null, 2));
-    return true;
-  } catch (error) {
-    console.error('Error writing videos:', error);
-    return false;
-  }
-};
-
 const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
 
+// DynamoDB Functions
+const saveVideoToDB = async (videoData) => {
+  const command = new PutCommand({
+    TableName: TABLE_NAME,
+    Item: videoData,
+  });
+  await docClient.send(command);
+  return videoData;
+};
+
+const getVideoFromDB = async (id) => {
+  const command = new GetCommand({
+    TableName: TABLE_NAME,
+    Key: { id },
+  });
+  const response = await docClient.send(command);
+  return response.Item;
+};
+
+const getAllVideosFromDB = async () => {
+  const command = new ScanCommand({
+    TableName: TABLE_NAME,
+  });
+  const response = await docClient.send(command);
+  return response.Items || [];
+};
+
+const updateVideoInDB = async (id, updates) => {
+  const updateExpressions = [];
+  const expressionAttributeNames = {};
+  const expressionAttributeValues = {};
+
+  Object.keys(updates).forEach((key, index) => {
+    updateExpressions.push(`#attr${index} = :val${index}`);
+    expressionAttributeNames[`#attr${index}`] = key;
+    expressionAttributeValues[`:val${index}`] = updates[key];
+  });
+
+  const command = new UpdateCommand({
+    TableName: TABLE_NAME,
+    Key: { id },
+    UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+    ExpressionAttributeNames: expressionAttributeNames,
+    ExpressionAttributeValues: expressionAttributeValues,
+    ReturnValues: 'ALL_NEW',
+  });
+
+  const response = await docClient.send(command);
+  return response.Attributes;
+};
+
+const deleteVideoFromDB = async (id) => {
+  const command = new DeleteCommand({
+    TableName: TABLE_NAME,
+    Key: { id },
+  });
+  await docClient.send(command);
+};
+
 // GET all videos
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const videos = readVideos();
+    const videos = await getAllVideosFromDB();
     const { category, search } = req.query;
 
     let filtered = videos;
@@ -48,146 +93,21 @@ router.get('/', (req, res) => {
       const searchLower = search.toLowerCase();
       filtered = filtered.filter(v =>
         v.title.toLowerCase().includes(searchLower) ||
-        v.description.toLowerCase().includes(searchLower)
+        (v.description && v.description.toLowerCase().includes(searchLower))
       );
     }
 
+    // Sort by upload date (newest first)
+    filtered.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
     res.json({ success: true, count: filtered.length, data: filtered });
   } catch (error) {
+    console.error('DynamoDB Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// GET single video
-router.get('/:id', (req, res) => {
-  try {
-    const videos = readVideos();
-    const video = videos.find(v => v.id === req.params.id);
-
-    if (!video) {
-      return res.status(404).json({ success: false, error: 'Video not found' });
-    }
-
-    // Increment view count
-    video.views = (video.views || 0) + 1;
-    writeVideos(videos);
-
-    res.json({ success: true, data: video });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// POST create video
-router.post('/', (req, res) => {
-  try {
-    const { title, description, url, thumbnail, category, duration } = req.body;
-
-    if (!title || !url) {
-      return res.status(400).json({
-        success: false,
-        error: 'Title and URL are required'
-      });
-    }
-
-    const videos = readVideos();
-    const newVideo = {
-      id: generateId(),
-      title,
-      description: description || '',
-      url,
-      thumbnail: thumbnail || 'https://via.placeholder.com/320x180?text=Video',
-      category: category || 'other',
-      duration: duration || '0:00',
-      views: 0,
-      likes: 0,
-      dislikes: 0,
-      channel: 'My Channel',
-      uploadedAt: new Date().toISOString()
-    };
-
-    videos.unshift(newVideo);
-    writeVideos(videos);
-
-    res.status(201).json({ success: true, data: newVideo });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// PUT update video
-router.put('/:id', (req, res) => {
-  try {
-    const videos = readVideos();
-    const index = videos.findIndex(v => v.id === req.params.id);
-
-    if (index === -1) {
-      return res.status(404).json({ success: false, error: 'Video not found' });
-    }
-
-    const { title, description, url, thumbnail, category, duration } = req.body;
-    videos[index] = {
-      ...videos[index],
-      title: title || videos[index].title,
-      description: description !== undefined ? description : videos[index].description,
-      url: url || videos[index].url,
-      thumbnail: thumbnail || videos[index].thumbnail,
-      category: category || videos[index].category,
-      duration: duration || videos[index].duration,
-      updatedAt: new Date().toISOString()
-    };
-
-    writeVideos(videos);
-    res.json({ success: true, data: videos[index] });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// POST like/dislike video
-router.post('/:id/reaction', (req, res) => {
-  try {
-    const { type } = req.body; // 'like' or 'dislike'
-    const videos = readVideos();
-    const video = videos.find(v => v.id === req.params.id);
-
-    if (!video) {
-      return res.status(404).json({ success: false, error: 'Video not found' });
-    }
-
-    if (type === 'like') {
-      video.likes = (video.likes || 0) + 1;
-    } else if (type === 'dislike') {
-      video.dislikes = (video.dislikes || 0) + 1;
-    }
-
-    writeVideos(videos);
-    res.json({ success: true, data: video });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// DELETE video
-router.delete('/:id', (req, res) => {
-  try {
-    const videos = readVideos();
-    const index = videos.findIndex(v => v.id === req.params.id);
-
-    if (index === -1) {
-      return res.status(404).json({ success: false, error: 'Video not found' });
-    }
-
-    const deletedVideo = videos.splice(index, 1)[0];
-    writeVideos(videos);
-
-    res.json({ success: true, data: deletedVideo });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// GET categories
+// GET categories (must be before /:id route)
 router.get('/meta/categories', (req, res) => {
   res.json({
     success: true,
@@ -203,6 +123,129 @@ router.get('/meta/categories', (req, res) => {
       { id: 'other', name: 'Other' }
     ]
   });
+});
+
+// GET single video
+router.get('/:id', async (req, res) => {
+  try {
+    const video = await getVideoFromDB(req.params.id);
+
+    if (!video) {
+      return res.status(404).json({ success: false, error: 'Video not found' });
+    }
+
+    // Increment view count
+    const updatedVideo = await updateVideoInDB(req.params.id, {
+      views: (video.views || 0) + 1
+    });
+
+    res.json({ success: true, data: updatedVideo });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST create video
+router.post('/', async (req, res) => {
+  try {
+    const { title, description, url, thumbnail, category, duration } = req.body;
+
+    if (!title || !url) {
+      return res.status(400).json({
+        success: false,
+        error: 'Title and URL are required'
+      });
+    }
+
+    const newVideo = {
+      id: generateId(),
+      title,
+      description: description || '',
+      url,
+      thumbnail: thumbnail || 'https://via.placeholder.com/320x180?text=Video',
+      category: category || 'other',
+      duration: duration || '0:00',
+      views: 0,
+      likes: 0,
+      dislikes: 0,
+      channel: 'My Channel',
+      uploadedAt: new Date().toISOString()
+    };
+
+    await saveVideoToDB(newVideo);
+    res.status(201).json({ success: true, data: newVideo });
+  } catch (error) {
+    console.error('DynamoDB Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// PUT update video
+router.put('/:id', async (req, res) => {
+  try {
+    const video = await getVideoFromDB(req.params.id);
+
+    if (!video) {
+      return res.status(404).json({ success: false, error: 'Video not found' });
+    }
+
+    const { title, description, url, thumbnail, category, duration } = req.body;
+
+    const updates = {
+      title: title || video.title,
+      description: description !== undefined ? description : video.description,
+      url: url || video.url,
+      thumbnail: thumbnail || video.thumbnail,
+      category: category || video.category,
+      duration: duration || video.duration,
+      updatedAt: new Date().toISOString()
+    };
+
+    const updatedVideo = await updateVideoInDB(req.params.id, updates);
+    res.json({ success: true, data: updatedVideo });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST like/dislike video
+router.post('/:id/reaction', async (req, res) => {
+  try {
+    const { type } = req.body; // 'like' or 'dislike'
+    const video = await getVideoFromDB(req.params.id);
+
+    if (!video) {
+      return res.status(404).json({ success: false, error: 'Video not found' });
+    }
+
+    let updates = {};
+    if (type === 'like') {
+      updates.likes = (video.likes || 0) + 1;
+    } else if (type === 'dislike') {
+      updates.dislikes = (video.dislikes || 0) + 1;
+    }
+
+    const updatedVideo = await updateVideoInDB(req.params.id, updates);
+    res.json({ success: true, data: updatedVideo });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// DELETE video
+router.delete('/:id', async (req, res) => {
+  try {
+    const video = await getVideoFromDB(req.params.id);
+
+    if (!video) {
+      return res.status(404).json({ success: false, error: 'Video not found' });
+    }
+
+    await deleteVideoFromDB(req.params.id);
+    res.json({ success: true, data: video });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 module.exports = router;
