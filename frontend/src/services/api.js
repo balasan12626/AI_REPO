@@ -12,6 +12,11 @@ const apiRequest = async (endpoint, options = {}) => {
     ...options,
   };
 
+  // Remove Content-Type for FormData
+  if (options.body instanceof FormData) {
+    delete config.headers['Content-Type'];
+  }
+
   try {
     const response = await fetch(url, config);
     const data = await response.json();
@@ -27,33 +32,80 @@ const apiRequest = async (endpoint, options = {}) => {
   }
 };
 
-// Item API functions
-export const itemsApi = {
-  // Get all items
-  getAll: () => apiRequest('/items'),
+// Videos API
+export const videosApi = {
+  getAll: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiRequest(`/videos${query ? `?${query}` : ''}`);
+  },
 
-  // Get single item by ID
-  getById: (id) => apiRequest(`/items/${id}`),
+  getById: (id) => apiRequest(`/videos/${id}`),
 
-  // Create new item
-  create: (itemData) => apiRequest('/items', {
+  create: (videoData) => apiRequest('/videos', {
     method: 'POST',
-    body: JSON.stringify(itemData),
+    body: JSON.stringify(videoData),
   }),
 
-  // Update item
-  update: (id, itemData) => apiRequest(`/items/${id}`, {
+  update: (id, videoData) => apiRequest(`/videos/${id}`, {
     method: 'PUT',
-    body: JSON.stringify(itemData),
+    body: JSON.stringify(videoData),
   }),
 
-  // Delete item
-  delete: (id) => apiRequest(`/items/${id}`, {
+  delete: (id) => apiRequest(`/videos/${id}`, {
     method: 'DELETE',
   }),
+
+  react: (id, type) => apiRequest(`/videos/${id}/reaction`, {
+    method: 'POST',
+    body: JSON.stringify({ type }),
+  }),
+
+  getCategories: () => apiRequest('/videos/meta/categories'),
+};
+
+// Files API
+export const filesApi = {
+  getAll: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiRequest(`/files${query ? `?${query}` : ''}`);
+  },
+
+  getById: (id) => apiRequest(`/files/${id}`),
+
+  createFolder: (name, parentId) => apiRequest('/files/folder', {
+    method: 'POST',
+    body: JSON.stringify({ name, parentId }),
+  }),
+
+  upload: async (file, parentId) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (parentId) formData.append('parentId', parentId);
+
+    return apiRequest('/files/upload', {
+      method: 'POST',
+      body: formData,
+    });
+  },
+
+  rename: (id, name) => apiRequest(`/files/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name }),
+  }),
+
+  move: (id, parentId) => apiRequest(`/files/${id}/move`, {
+    method: 'PUT',
+    body: JSON.stringify({ parentId }),
+  }),
+
+  delete: (id) => apiRequest(`/files/${id}`, {
+    method: 'DELETE',
+  }),
+
+  getPath: (id) => apiRequest(`/files/${id}/path`),
 };
 
 // Health check
 export const healthCheck = () => apiRequest('/health');
 
-export default itemsApi;
+export default { videosApi, filesApi, healthCheck };

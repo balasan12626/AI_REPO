@@ -1,0 +1,70 @@
+[
+  {
+    "id": "folder1",
+    "name": "Documents",
+    "type": "folder",
+    "parentId": "root",
+    "createdAt": "2024-01-01T10:00:00.000Z",
+    "updatedAt": "2024-01-01T10:00:00.000Z"
+  },
+  {
+    "id": "folder2",
+    "name": "Images",
+    "type": "folder",
+    "parentId": "root",
+    "createdAt": "2024-01-02T10:00:00.000Z",
+    "updatedAt": "2024-01-02T10:00:00.000Z"
+  },
+  {
+    "id": "folder3",
+    "name": "Projects",
+    "type": "folder",
+    "parentId": "root",
+    "createdAt": "2024-01-03T10:00:00.000Z",
+    "updatedAt": "2024-01-03T10:00:00.000Z"
+  },
+  {
+    "id": "file1",
+    "name": "README.txt",
+    "type": "file",
+    "fileType": "document",
+    "size": 1024,
+    "sizeFormatted": "1 KB",
+    "parentId": "root",
+    "createdAt": "2024-01-04T10:00:00.000Z",
+    "updatedAt": "2024-01-04T10:00:00.000Z"
+  },
+  {
+    "id": "file2",
+    "name": "Report.pdf",
+    "type": "file",
+    "fileType": "pdf",
+    "size": 2048000,
+    "sizeFormatted": "2 MB",
+    "parentId": "folder1",
+    "createdAt": "2024-01-05T10:00:00.000Z",
+    "updatedAt": "2024-01-05T10:00:00.000Z"
+  },
+  {
+    "id": "file3",
+    "name": "Photo.jpg",
+    "type": "file",
+    "fileType": "image",
+    "size": 512000,
+    "sizeFormatted": "500 KB",
+    "parentId": "folder2",
+    "createdAt": "2024-01-06T10:00:00.000Z",
+    "updatedAt": "2024-01-06T10:00:00.000Z"
+  },
+  {
+    "id": "file4",
+    "name": "app.js",
+    "type": "file",
+    "fileType": "code",
+    "size": 8192,
+    "sizeFormatted": "8 KB",
+    "parentId": "folder3",
+    "createdAt": "2024-01-07T10:00:00.000Z",
+    "updatedAt": "2024-01-07T10:00:00.000Z"
+  }
+]
