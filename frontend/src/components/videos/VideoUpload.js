@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
-const VideoUpload = ({ onClose, onUpload, categories }) => {
+const VideoUpload = ({ onClose, onSubmit, categories, editingVideo }) => {
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -9,27 +9,48 @@ const VideoUpload = ({ onClose, onUpload, categories }) => {
     category: 'other',
     duration: ''
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (editingVideo) {
+      setFormData({
+        title: editingVideo.title || '',
+        description: editingVideo.description || '',
+        url: editingVideo.url || '',
+        thumbnail: editingVideo.thumbnail || '',
+        category: editingVideo.category || 'other',
+        duration: editingVideo.duration || ''
+      });
+    }
+  }, [editingVideo]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!formData.title || !formData.url) return;
 
-    onUpload({
-      ...formData,
-      thumbnail: formData.thumbnail || `https://picsum.photos/seed/${Date.now()}/320/180`
-    });
+    setIsSubmitting(true);
+    try {
+      await onSubmit({
+        ...formData,
+        thumbnail: formData.thumbnail || `https://picsum.photos/seed/${Date.now()}/320/180`
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  const isEditing = !!editingVideo;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Upload Video</h2>
+          <h2>{isEditing ? 'Edit Video' : 'Add New Video'}</h2>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
 
@@ -104,11 +125,11 @@ const VideoUpload = ({ onClose, onUpload, categories }) => {
           </div>
 
           <div className="form-actions">
-            <button type="button" className="btn-secondary" onClick={onClose}>
+            <button type="button" className="btn-secondary" onClick={onClose} disabled={isSubmitting}>
               Cancel
             </button>
-            <button type="submit" className="btn-primary">
-              Upload Video
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? 'Saving...' : (isEditing ? 'Update Video' : 'Create Video')}
             </button>
           </div>
         </form>
